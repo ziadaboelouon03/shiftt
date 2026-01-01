@@ -57,7 +57,7 @@ const handler = async (req: Request): Promise<Response> => {
 
     // Send email with OTP
     const emailResponse = await resend.emails.send({
-      from: "SHIFT <onboarding@resend.dev>",
+      from: "SHIFT <noreply@shift.com>",
       to: [email],
       subject: "Your SHIFT Verification Code",
       html: `
