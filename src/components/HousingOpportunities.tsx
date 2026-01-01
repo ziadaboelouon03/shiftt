@@ -61,8 +61,16 @@ const HousingOpportunities = () => {
           <span className="inline-block text-primary font-semibold text-sm uppercase tracking-widest">
             New Opportunity
           </span>
+          <div className="flex justify-center gap-4 mb-4">
+            <div className="w-14 h-14 rounded-full bg-primary/10 flex items-center justify-center">
+              <Building2 className="w-7 h-7 text-primary" />
+            </div>
+            <div className="w-14 h-14 rounded-full bg-accent/20 flex items-center justify-center">
+              <Briefcase className="w-7 h-7 text-accent-foreground" />
+            </div>
+          </div>
           <h2 className="text-4xl md:text-5xl lg:text-6xl font-bold text-foreground">
-            Housing & <span className="text-gradient">Employment</span>
+            Housing & <span className="text-gradient">Job Opportunities</span>
           </h2>
           <p className="text-lg text-muted-foreground leading-relaxed">
             Cities are expensive, but the desert has room to grow. The government is building new cities 
