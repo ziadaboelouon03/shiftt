@@ -3,7 +3,9 @@ import Navigation from "@/components/Navigation";
 import Hero from "@/components/Hero";
 import WhatIsShift from "@/components/WhatIsShift";
 import Pillars from "@/components/Pillars";
+import HousingOpportunities from "@/components/HousingOpportunities";
 import ShiftCenter from "@/components/ShiftCenter";
+import ContactForm from "@/components/ContactForm";
 import Summary from "@/components/Summary";
 import Footer from "@/components/Footer";
 
@@ -16,7 +18,7 @@ const Index = () => {
           name="description" 
           content="SHIFT decentralizes essential services across Egypt, bringing healthcare, government services, and economic opportunities to secondary cities and towns." 
         />
-        <meta name="keywords" content="SHIFT, Egypt, decentralization, healthcare, government services, secondary cities, economic development" />
+        <meta name="keywords" content="SHIFT, Egypt, decentralization, healthcare, government services, secondary cities, economic development, housing" />
         <link rel="canonical" href="https://shift.eg" />
       </Helmet>
       
@@ -26,7 +28,9 @@ const Index = () => {
           <Hero />
           <WhatIsShift />
           <Pillars />
+          <HousingOpportunities />
           <ShiftCenter />
+          <ContactForm />
           <Summary />
         </main>
         <Footer />
