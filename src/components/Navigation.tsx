@@ -1,13 +1,15 @@
 import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
-import { Menu, X, LogOut } from "lucide-react";
+import { Menu, X, LogOut, Shield } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
+import { useUserRole } from "@/hooks/useUserRole";
 import { useNavigate } from "react-router-dom";
 
 const Navigation = () => {
   const [isScrolled, setIsScrolled] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const { user, signOut } = useAuth();
+  const { isAdmin } = useUserRole();
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -74,6 +76,16 @@ const Navigation = () => {
             ))}
             {user ? (
               <div className="flex items-center gap-4">
+                {isAdmin && (
+                  <Button 
+                    variant={isScrolled ? "outline" : "hero"} 
+                    size="sm"
+                    onClick={() => navigate("/admin")}
+                  >
+                    <Shield className="w-4 h-4 mr-1" />
+                    Admin
+                  </Button>
+                )}
                 <span className={`text-sm ${isScrolled ? "text-muted-foreground" : "text-primary-foreground/80"}`}>
                   {user.email?.split("@")[0]}
                 </span>
@@ -126,6 +138,12 @@ const Navigation = () => {
               ))}
               {user ? (
                 <>
+                  {isAdmin && (
+                    <Button variant="outline" className="mt-2" onClick={() => { navigate("/admin"); setIsMobileMenuOpen(false); }}>
+                      <Shield className="w-4 h-4 mr-2" />
+                      Admin Dashboard
+                    </Button>
+                  )}
                   <span className="text-sm text-muted-foreground py-2">
                     Signed in as {user.email}
                   </span>
