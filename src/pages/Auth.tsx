@@ -103,29 +103,22 @@ const Auth = () => {
         return;
       }
 
-      // Verify OTP from database
-      const { data, error } = await supabase
-        .from("otp_codes")
-        .select("*")
-        .eq("email", email)
-        .eq("code", otpCode)
-        .eq("used", false)
-        .gt("expires_at", new Date().toISOString())
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .single();
+      // Call secure edge function to verify OTP
+      const response = await supabase.functions.invoke("verify-otp", {
+        body: { email, code: otpCode },
+      });
 
-      if (error || !data) {
-        setErrors({ otp: "Invalid or expired code" });
+      if (response.error) {
+        throw new Error(response.error.message);
+      }
+
+      const result = response.data;
+
+      if (!result.valid) {
+        setErrors({ otp: result.error || "Invalid or expired code" });
         setIsLoading(false);
         return;
       }
-
-      // Mark OTP as used
-      await supabase
-        .from("otp_codes")
-        .update({ used: true })
-        .eq("id", data.id);
 
       toast({
         title: "Email verified!",
