@@ -82,9 +82,14 @@ const handler = async (req: Request): Promise<Response> => {
       `,
     });
 
+    if (emailResponse?.error) {
+      console.error("Resend error:", emailResponse.error);
+      throw new Error(emailResponse.error.message ?? "Failed to send email");
+    }
+
     console.log("Email sent successfully:", emailResponse);
 
-    return new Response(JSON.stringify({ success: true }), {
+    return new Response(JSON.stringify({ success: true, id: emailResponse?.data?.id }), {
       status: 200,
       headers: { "Content-Type": "application/json", ...corsHeaders },
     });
