@@ -42,7 +42,7 @@ const pillarsData = [
 
 const Pillars = () => {
   return (
-    <section className="py-24 lg:py-32 bg-background relative">
+    <section id="pillars" className="py-24 lg:py-32 bg-background relative">
       {/* Decorative Pattern */}
       <div className="absolute inset-0 geometric-pattern opacity-50" />
 
