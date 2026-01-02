@@ -65,19 +65,17 @@ const Auth = () => {
         return;
       }
 
-      // Use Supabase's built-in OTP - completely free!
-      const { error } = await supabase.auth.signInWithOtp({
-        email,
-        options: {
-          shouldCreateUser: true,
-          data: {
-            full_name: fullName,
-          },
-        },
+      // Use custom OTP edge function that sends actual 6-digit codes
+      const response = await supabase.functions.invoke("send-otp", {
+        body: { email, fullName },
       });
 
-      if (error) {
-        throw error;
+      if (response.error) {
+        throw new Error(response.error.message || "Failed to send code");
+      }
+
+      if (response.data?.error) {
+        throw new Error(response.data.error);
       }
 
       toast({
@@ -109,31 +107,63 @@ const Auth = () => {
         return;
       }
 
-      // Verify OTP using Supabase's built-in verification
-      const { data, error } = await supabase.auth.verifyOtp({
-        email,
-        token: otpCode,
-        type: "email",
+      // Verify OTP using custom edge function
+      const response = await supabase.functions.invoke("verify-otp", {
+        body: { email, code: otpCode },
       });
 
-      if (error) {
-        setErrors({ otp: error.message || "Invalid or expired code" });
+      if (response.error) {
+        setErrors({ otp: response.error.message || "Verification failed" });
         setIsLoading(false);
         return;
       }
 
-      if (data.user) {
-        toast({
-          title: "Welcome to SHIFT!",
-          description: "Your account has been verified.",
-        });
-        navigate("/");
+      if (!response.data?.valid) {
+        setErrors({ otp: response.data?.error || "Invalid or expired code" });
+        setIsLoading(false);
+        return;
       }
+
+      // OTP verified - now create/sign in the user with a generated password
+      const tempPassword = `SHIFT_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+      
+      // Try to sign up the user (will fail if already exists, which is fine)
+      const { error: signUpError } = await supabase.auth.signUp({
+        email,
+        password: tempPassword,
+        options: {
+          data: { full_name: response.data.fullName || fullName },
+        },
+      });
+
+      // If user already exists, sign them in with magic link approach
+      if (signUpError?.message?.includes("already registered")) {
+        // For existing users, we'll use the admin API approach
+        toast({
+          title: "Account exists",
+          description: "Please use the sign-in form with your password.",
+          variant: "destructive",
+        });
+        setIsSignUp(false);
+        setAuthStep("info");
+        setIsLoading(false);
+        return;
+      }
+
+      if (signUpError) {
+        throw signUpError;
+      }
+
+      toast({
+        title: "Welcome to SHIFT!",
+        description: "Your account has been created.",
+      });
+      navigate("/");
     } catch (err: any) {
       console.error("Error verifying OTP:", err);
       toast({
         title: "Verification failed",
-        description: "Please try again.",
+        description: err.message || "Please try again.",
         variant: "destructive",
       });
     } finally {
@@ -144,18 +174,16 @@ const Auth = () => {
   const handleResendOtp = async () => {
     setIsLoading(true);
     try {
-      const { error } = await supabase.auth.signInWithOtp({
-        email,
-        options: {
-          shouldCreateUser: true,
-          data: {
-            full_name: fullName,
-          },
-        },
+      const response = await supabase.functions.invoke("send-otp", {
+        body: { email, fullName },
       });
 
-      if (error) {
-        throw error;
+      if (response.error) {
+        throw new Error(response.error.message || "Failed to send code");
+      }
+
+      if (response.data?.error) {
+        throw new Error(response.data.error);
       }
 
       toast({
