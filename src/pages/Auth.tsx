@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,7 +9,7 @@ import { Eye, EyeOff, Mail, Lock, User, ArrowLeft, CheckCircle } from "lucide-re
 import { z } from "zod";
 import { supabase } from "@/integrations/supabase/client";
 
-type AuthStep = "info" | "verify" | "password";
+type AuthStep = "info" | "email-sent" | "set-password";
 
 const emailSchema = z.object({
   fullName: z.string().min(2, "Name must be at least 2 characters").max(100),
@@ -18,6 +18,10 @@ const emailSchema = z.object({
 
 const passwordSchema = z.object({
   password: z.string().min(6, "Password must be at least 6 characters"),
+  confirmPassword: z.string().min(6, "Password must be at least 6 characters"),
+}).refine((data) => data.password === data.confirmPassword, {
+  message: "Passwords don't match",
+  path: ["confirmPassword"],
 });
 
 const signInSchema = z.object({
@@ -26,27 +30,57 @@ const signInSchema = z.object({
 });
 
 const Auth = () => {
+  const [searchParams] = useSearchParams();
   const [isSignUp, setIsSignUp] = useState(false);
   const [authStep, setAuthStep] = useState<AuthStep>("info");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [fullName, setFullName] = useState("");
-  const [otpCode, setOtpCode] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [errors, setErrors] = useState<{ [key: string]: string }>({});
+  const [isSettingPassword, setIsSettingPassword] = useState(false);
   
   const { signIn, user, loading } = useAuth();
   const navigate = useNavigate();
   const { toast } = useToast();
 
+  // Check if user came from magic link (needs to set password)
   useEffect(() => {
-    if (!loading && user) {
-      navigate("/");
-    }
-  }, [user, loading, navigate]);
+    const checkSession = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      
+      // If user has a session but no password set (came from magic link)
+      if (session?.user) {
+        const hasPassword = session.user.user_metadata?.has_password;
+        if (!hasPassword) {
+          setIsSettingPassword(true);
+          setAuthStep("set-password");
+          setEmail(session.user.email || "");
+          setFullName(session.user.user_metadata?.full_name || "");
+        } else {
+          // User already has password, redirect to home
+          navigate("/");
+        }
+      }
+    };
+    
+    checkSession();
+  }, [navigate]);
 
-  const handleSendOtp = async (e: React.FormEvent) => {
+  useEffect(() => {
+    // If user is fully set up, redirect to home
+    if (!loading && user && !isSettingPassword) {
+      const hasPassword = user.user_metadata?.has_password;
+      if (hasPassword) {
+        navigate("/");
+      }
+    }
+  }, [user, loading, navigate, isSettingPassword]);
+
+  const handleSendMagicLink = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrors({});
     setIsLoading(true);
@@ -65,28 +99,34 @@ const Auth = () => {
         return;
       }
 
-      // Use custom OTP edge function that sends actual 6-digit codes
-      const response = await supabase.functions.invoke("send-otp", {
-        body: { email, fullName },
+      // Send magic link using Supabase (free!)
+      const redirectUrl = `${window.location.origin}/auth`;
+      
+      const { error } = await supabase.auth.signInWithOtp({
+        email,
+        options: {
+          shouldCreateUser: true,
+          emailRedirectTo: redirectUrl,
+          data: {
+            full_name: fullName,
+            has_password: false, // Will be set to true after password setup
+          },
+        },
       });
 
-      if (response.error) {
-        throw new Error(response.error.message || "Failed to send code");
-      }
-
-      if (response.data?.error) {
-        throw new Error(response.data.error);
+      if (error) {
+        throw error;
       }
 
       toast({
-        title: "Verification code sent!",
-        description: "Please check your email for the 6-digit code.",
+        title: "Check your email!",
+        description: "We sent you a verification link.",
       });
-      setAuthStep("verify");
+      setAuthStep("email-sent");
     } catch (err: any) {
-      console.error("Error sending OTP:", err);
+      console.error("Error sending magic link:", err);
       toast({
-        title: "Failed to send code",
+        title: "Failed to send email",
         description: err.message || "Please try again.",
         variant: "destructive",
       });
@@ -95,74 +135,53 @@ const Auth = () => {
     }
   };
 
-  const handleVerifyOtp = async (e: React.FormEvent) => {
+  const handleSetPassword = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrors({});
     setIsLoading(true);
 
     try {
-      if (otpCode.length !== 6) {
-        setErrors({ otp: "Please enter the 6-digit code" });
+      const validation = passwordSchema.safeParse({ password, confirmPassword });
+      if (!validation.success) {
+        const fieldErrors: { [key: string]: string } = {};
+        validation.error.errors.forEach((err) => {
+          if (err.path[0]) {
+            fieldErrors[err.path[0] as string] = err.message;
+          }
+        });
+        setErrors(fieldErrors);
         setIsLoading(false);
         return;
       }
 
-      // Verify OTP using custom edge function
-      const response = await supabase.functions.invoke("verify-otp", {
-        body: { email, code: otpCode },
-      });
-
-      if (response.error) {
-        setErrors({ otp: response.error.message || "Verification failed" });
-        setIsLoading(false);
-        return;
-      }
-
-      if (!response.data?.valid) {
-        setErrors({ otp: response.data?.error || "Invalid or expired code" });
-        setIsLoading(false);
-        return;
-      }
-
-      // OTP verified - now create/sign in the user with a generated password
-      const tempPassword = `SHIFT_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-      
-      // Try to sign up the user (will fail if already exists, which is fine)
-      const { error: signUpError } = await supabase.auth.signUp({
-        email,
-        password: tempPassword,
-        options: {
-          data: { full_name: response.data.fullName || fullName },
+      // Update the user's password
+      const { error } = await supabase.auth.updateUser({
+        password: password,
+        data: {
+          has_password: true,
         },
       });
 
-      // If user already exists, sign them in with magic link approach
-      if (signUpError?.message?.includes("already registered")) {
-        // For existing users, we'll use the admin API approach
-        toast({
-          title: "Account exists",
-          description: "Please use the sign-in form with your password.",
-          variant: "destructive",
-        });
-        setIsSignUp(false);
-        setAuthStep("info");
-        setIsLoading(false);
-        return;
-      }
-
-      if (signUpError) {
-        throw signUpError;
+      if (error) {
+        throw error;
       }
 
       toast({
-        title: "Welcome to SHIFT!",
-        description: "Your account has been created.",
+        title: "Password set successfully!",
+        description: "Please sign in with your new password.",
       });
-      navigate("/");
+
+      // Sign out and redirect to sign in
+      await supabase.auth.signOut();
+      setIsSettingPassword(false);
+      setIsSignUp(false);
+      setAuthStep("info");
+      setPassword("");
+      setConfirmPassword("");
     } catch (err: any) {
-      console.error("Error verifying OTP:", err);
+      console.error("Error setting password:", err);
       toast({
-        title: "Verification failed",
+        title: "Failed to set password",
         description: err.message || "Please try again.",
         variant: "destructive",
       });
@@ -171,24 +190,30 @@ const Auth = () => {
     }
   };
 
-  const handleResendOtp = async () => {
+  const handleResendMagicLink = async () => {
     setIsLoading(true);
     try {
-      const response = await supabase.functions.invoke("send-otp", {
-        body: { email, fullName },
+      const redirectUrl = `${window.location.origin}/auth`;
+      
+      const { error } = await supabase.auth.signInWithOtp({
+        email,
+        options: {
+          shouldCreateUser: true,
+          emailRedirectTo: redirectUrl,
+          data: {
+            full_name: fullName,
+            has_password: false,
+          },
+        },
       });
 
-      if (response.error) {
-        throw new Error(response.error.message || "Failed to send code");
-      }
-
-      if (response.data?.error) {
-        throw new Error(response.data.error);
+      if (error) {
+        throw error;
       }
 
       toast({
-        title: "Code resent!",
-        description: "Please check your email for the new code.",
+        title: "Email resent!",
+        description: "Please check your inbox.",
       });
     } catch (err: any) {
       toast({
@@ -255,16 +280,16 @@ const Auth = () => {
 
   const resetSignUp = () => {
     setAuthStep("info");
-    setOtpCode("");
     setPassword("");
+    setConfirmPassword("");
     setErrors({});
   };
 
   const switchMode = () => {
     setIsSignUp(!isSignUp);
     setAuthStep("info");
-    setOtpCode("");
     setPassword("");
+    setConfirmPassword("");
     setErrors({});
   };
 
@@ -277,19 +302,96 @@ const Auth = () => {
   }
 
   const getStepTitle = () => {
+    if (isSettingPassword) return "Set your password";
     if (!isSignUp) return "Welcome back";
     switch (authStep) {
       case "info": return "Create your account";
-      case "verify": return "Verify your email";
+      case "email-sent": return "Check your email";
       default: return "Create your account";
     }
   };
 
   const renderSignUpContent = () => {
+    if (isSettingPassword || authStep === "set-password") {
+      return (
+        <form onSubmit={handleSetPassword} className="space-y-5">
+          <div className="text-center mb-4">
+            <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-green-100 mb-3">
+              <CheckCircle className="h-6 w-6 text-green-600" />
+            </div>
+            <p className="text-muted-foreground text-sm">
+              Email verified! Now set your password for <span className="font-medium text-foreground">{email}</span>
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="password">Password</Label>
+            <div className="relative">
+              <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                id="password"
+                type={showPassword ? "text" : "password"}
+                placeholder="••••••••"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="pl-10 pr-10"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              >
+                {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </button>
+            </div>
+            {errors.password && (
+              <p className="text-sm text-destructive">{errors.password}</p>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="confirmPassword">Confirm Password</Label>
+            <div className="relative">
+              <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                id="confirmPassword"
+                type={showConfirmPassword ? "text" : "password"}
+                placeholder="••••••••"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                className="pl-10 pr-10"
+              />
+              <button
+                type="button"
+                onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              >
+                {showConfirmPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </button>
+            </div>
+            {errors.confirmPassword && (
+              <p className="text-sm text-destructive">{errors.confirmPassword}</p>
+            )}
+          </div>
+
+          <Button type="submit" className="w-full" disabled={isLoading}>
+            {isLoading ? (
+              <span className="flex items-center gap-2">
+                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                Setting password...
+              </span>
+            ) : (
+              "Set Password & Continue"
+            )}
+          </Button>
+        </form>
+      );
+    }
+
     switch (authStep) {
       case "info":
         return (
-          <form onSubmit={handleSendOtp} className="space-y-5">
+          <form onSubmit={handleSendMagicLink} className="space-y-5">
             <div className="space-y-2">
               <Label htmlFor="fullName">Full Name</Label>
               <div className="relative">
@@ -330,7 +432,7 @@ const Auth = () => {
               {isLoading ? (
                 <span className="flex items-center gap-2">
                   <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                  Sending code...
+                  Sending link...
                 </span>
               ) : (
                 "Continue"
@@ -339,53 +441,30 @@ const Auth = () => {
           </form>
         );
 
-      case "verify":
+      case "email-sent":
         return (
-          <form onSubmit={handleVerifyOtp} className="space-y-5">
-            <div className="text-center mb-4">
-              <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-primary/10 mb-3">
-                <Mail className="h-6 w-6 text-primary" />
+          <div className="space-y-5">
+            <div className="text-center">
+              <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-primary/10 mb-4">
+                <Mail className="h-8 w-8 text-primary" />
               </div>
+              <h3 className="text-lg font-semibold mb-2">Check your email</h3>
+              <p className="text-muted-foreground text-sm mb-4">
+                We sent a verification link to <span className="font-medium text-foreground">{email}</span>
+              </p>
               <p className="text-muted-foreground text-sm">
-                We sent a 6-digit code to <span className="font-medium text-foreground">{email}</span>
+                Click the link in your email to verify and set your password.
               </p>
             </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="otp">Verification Code</Label>
-              <Input
-                id="otp"
-                type="text"
-                placeholder="000000"
-                value={otpCode}
-                onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
-                className="text-center text-2xl tracking-widest font-mono"
-                maxLength={6}
-              />
-              {errors.otp && (
-                <p className="text-sm text-destructive text-center">{errors.otp}</p>
-              )}
-            </div>
-
-            <Button type="submit" className="w-full" disabled={isLoading}>
-              {isLoading ? (
-                <span className="flex items-center gap-2">
-                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                  Verifying...
-                </span>
-              ) : (
-                "Verify & Continue"
-              )}
-            </Button>
 
             <div className="flex flex-col gap-2">
               <button
                 type="button"
-                onClick={handleResendOtp}
+                onClick={handleResendMagicLink}
                 disabled={isLoading}
                 className="w-full text-sm text-primary hover:underline"
               >
-                Resend code
+                {isLoading ? "Sending..." : "Resend email"}
               </button>
               <button
                 type="button"
@@ -396,7 +475,7 @@ const Auth = () => {
                 Use a different email
               </button>
             </div>
-          </form>
+          </div>
         );
 
       default:
@@ -419,13 +498,13 @@ const Auth = () => {
         </div>
 
         {/* Progress Indicator for Sign Up */}
-        {isSignUp && (
+        {isSignUp && !isSettingPassword && (
           <div className="flex justify-center gap-2 mb-6">
-            {["info", "verify"].map((step, index) => (
+            {["info", "email-sent"].map((step, index) => (
               <div
                 key={step}
                 className={`h-2 w-16 rounded-full transition-colors ${
-                  index <= ["info", "verify"].indexOf(authStep)
+                  index <= ["info", "email-sent"].indexOf(authStep)
                     ? "bg-primary"
                     : "bg-muted"
                 }`}
@@ -436,7 +515,7 @@ const Auth = () => {
 
         {/* Auth Card */}
         <div className="bg-card border border-border rounded-2xl p-8 shadow-elegant">
-          {isSignUp ? (
+          {isSignUp || isSettingPassword ? (
             renderSignUpContent()
           ) : (
             <form onSubmit={handleSignIn} className="space-y-5">
@@ -496,21 +575,23 @@ const Auth = () => {
             </form>
           )}
 
-          <div className="mt-6 text-center">
-            <p className="text-sm text-muted-foreground">
-              {isSignUp ? "Already have an account?" : "Don't have an account?"}{" "}
-              <button
-                type="button"
-                onClick={switchMode}
-                className="text-primary hover:underline font-medium"
-              >
-                {isSignUp ? "Sign in" : "Sign up"}
-              </button>
-            </p>
-          </div>
+          {!isSettingPassword && (
+            <div className="mt-6 text-center">
+              <p className="text-sm text-muted-foreground">
+                {isSignUp ? "Already have an account?" : "Don't have an account?"}
+                <button
+                  type="button"
+                  onClick={switchMode}
+                  className="ml-1 text-primary hover:underline font-medium"
+                >
+                  {isSignUp ? "Sign in" : "Sign up"}
+                </button>
+              </p>
+            </div>
+          )}
         </div>
 
-        {/* Back to home */}
+        {/* Back to Home */}
         <div className="text-center mt-6">
           <a
             href="/"
