@@ -47,28 +47,64 @@ const Auth = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
 
-  // Check if user came from magic link (needs to set password)
+  // Check if user came from email verification link
   useEffect(() => {
     const checkSession = async () => {
       const { data: { session } } = await supabase.auth.getSession();
       
-      // If user has a session but no password set (came from magic link)
+      // If user has a session
       if (session?.user) {
         const hasPassword = session.user.user_metadata?.has_password;
-        if (!hasPassword) {
-          setIsSettingPassword(true);
-          setAuthStep("set-password");
-          setEmail(session.user.email || "");
-          setFullName(session.user.user_metadata?.full_name || "");
+        
+        // Check if email is confirmed
+        if (session.user.email_confirmed_at || session.user.confirmed_at) {
+          // Email is confirmed
+          if (!hasPassword) {
+            // User needs to set password
+            setIsSettingPassword(true);
+            setAuthStep("set-password");
+            setEmail(session.user.email || "");
+            setFullName(session.user.user_metadata?.full_name || "");
+          } else {
+            // User has password, redirect to home
+            navigate("/");
+          }
         } else {
-          // User already has password, redirect to home
-          navigate("/");
+          // Email not confirmed yet - sign them out
+          await supabase.auth.signOut();
+          toast({
+            title: "Email not verified",
+            description: "Please check your email and click the verification link.",
+            variant: "destructive",
+          });
         }
       }
     };
     
     checkSession();
-  }, [navigate]);
+    
+    // Listen for auth state changes (like when they click the email link)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (event === 'SIGNED_IN' && session?.user) {
+        const hasPassword = session.user.user_metadata?.has_password;
+        
+        if (session.user.email_confirmed_at || session.user.confirmed_at) {
+          if (!hasPassword) {
+            setIsSettingPassword(true);
+            setAuthStep("set-password");
+            setEmail(session.user.email || "");
+            setFullName(session.user.user_metadata?.full_name || "");
+          } else {
+            navigate("/");
+          }
+        }
+      }
+    });
+    
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [navigate, toast]);
 
   useEffect(() => {
     // If user is fully set up, redirect to home
@@ -99,14 +135,12 @@ const Auth = () => {
         return;
       }
 
-      // Send magic link using Supabase (free!)
-      const redirectUrl = `${window.location.origin}/auth`;
-      
-      const { error } = await supabase.auth.signInWithOtp({
+      // Use signUp for proper email verification
+      const { data, error } = await supabase.auth.signUp({
         email,
+        password: 'temporary-password-' + Math.random().toString(36), // Temporary password
         options: {
-          shouldCreateUser: true,
-          emailRedirectTo: redirectUrl,
+          emailRedirectTo: `${window.location.origin}/auth`,
           data: {
             full_name: fullName,
             has_password: false, // Will be set to true after password setup
@@ -118,18 +152,38 @@ const Auth = () => {
         throw error;
       }
 
-      toast({
-        title: "Check your email!",
-        description: "We sent you a verification link.",
-      });
-      setAuthStep("email-sent");
+      // Check if email confirmation is required
+      if (data?.user && !data.user.confirmed_at) {
+        toast({
+          title: "Check your email!",
+          description: "We sent you a verification link. Click it to activate your account.",
+        });
+        setAuthStep("email-sent");
+      } else {
+        // Email already confirmed (shouldn't happen on first signup)
+        toast({
+          title: "Account created!",
+          description: "Please set your password.",
+        });
+        setAuthStep("set-password");
+      }
     } catch (err: any) {
-      console.error("Error sending magic link:", err);
-      toast({
-        title: "Failed to send email",
-        description: err.message || "Please try again.",
-        variant: "destructive",
-      });
+      console.error("Error sending verification email:", err);
+      
+      // Handle "User already registered" error
+      if (err.message?.includes("already registered")) {
+        toast({
+          title: "Email already exists",
+          description: "Please sign in instead or use a different email.",
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "Failed to send email",
+          description: err.message || "Please try again.",
+          variant: "destructive",
+        });
+      }
     } finally {
       setIsLoading(false);
     }
@@ -193,18 +247,13 @@ const Auth = () => {
   const handleResendMagicLink = async () => {
     setIsLoading(true);
     try {
-      const redirectUrl = `${window.location.origin}/auth`;
-      
-      const { error } = await supabase.auth.signInWithOtp({
-        email,
+      // Resend confirmation email for existing user
+      const { error } = await supabase.auth.resend({
+        type: 'signup',
+        email: email,
         options: {
-          shouldCreateUser: true,
-          emailRedirectTo: redirectUrl,
-          data: {
-            full_name: fullName,
-            has_password: false,
-          },
-        },
+          emailRedirectTo: `${window.location.origin}/auth`,
+        }
       });
 
       if (error) {
@@ -213,7 +262,7 @@ const Auth = () => {
 
       toast({
         title: "Email resent!",
-        description: "Please check your inbox.",
+        description: "Please check your inbox and spam folder.",
       });
     } catch (err: any) {
       toast({
@@ -251,6 +300,12 @@ const Auth = () => {
           toast({
             title: "Invalid credentials",
             description: "Please check your email and password.",
+            variant: "destructive",
+          });
+        } else if (error.message.includes("Email not confirmed")) {
+          toast({
+            title: "Email not verified",
+            description: "Please check your email and click the verification link first.",
             variant: "destructive",
           });
         } else {
