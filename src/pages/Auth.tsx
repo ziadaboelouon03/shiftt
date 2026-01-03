@@ -396,7 +396,7 @@ const Auth = () => {
         </div>
 
         <div className="text-center mt-6">
-          
+          <a
             href="/"
             className="text-sm text-muted-foreground hover:text-foreground inline-flex items-center gap-1"
           >
