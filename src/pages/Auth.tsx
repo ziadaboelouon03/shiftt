@@ -78,7 +78,7 @@ const Auth = () => {
         return;
       }
 
-      // Send OTP to email
+      // CRITICAL: Use 'email' type to send OTP code only (not magic link)
       const { error } = await supabase.auth.signInWithOtp({
         email,
         options: {
@@ -139,7 +139,7 @@ const Auth = () => {
         return;
       }
 
-      // Verify OTP
+      // Verify OTP with type 'email'
       const { data, error } = await supabase.auth.verifyOtp({
         email,
         token: otp,
